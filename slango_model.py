@@ -32,6 +32,7 @@ def tokenize_text(text):
     tokens = [token.text for token in doc if not token.is_stop]
     return tokens
 
+#this may not be necessary?
 dataset['definition'] = dataset['definition'].astype(str).apply(preprocess_text)
 dataset['tokens'] = dataset['definition'].apply(tokenize_text)
 
@@ -51,3 +52,9 @@ definition_sequences = definition_tokenizer.texts_to_sequences(definitions)
 # Define the model
 max_word_sequence_length = max(len(seq) for seq in word_sequences)
 max_definition_sequence_length = max(len(seq) for seq in definition_sequences)
+
+model = Sequential()
+model.add(Embedding(input_dim=len(definition_tokenizer.word_index) + 1, output_dim=128, input_length=max_definition_sequence_length))
+model.add(LSTM(256))
+model.add(Dense(len(word_tokenizer.word_index) + 1, activation='softmax'))
+model.compile(loss = 'categorical_crossentropy', optimizer = 'adam')
