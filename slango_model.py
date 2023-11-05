@@ -2,7 +2,14 @@ import pandas as pd
 import numpy as np
 import spacy
 
-df = pd.read_csv('urbandict-word-defs.csv', error_bad_lines=False, nrows=10000)
+from keras.preprocessing.text import Tokenizer
+from keras.utils import pad_sequences
+from keras.models import Sequential
+from keras.layers import Embedding, LSTM, Dense
+
+max_words = 10000
+
+df = pd.read_csv('urbandict-word-defs.csv', error_bad_lines=False, nrows=max_words)
 
 df.dropna()
 df.drop_duplicates(subset=['word', 'definition'], inplace = True)
@@ -28,4 +35,19 @@ def tokenize_text(text):
 dataset['definition'] = dataset['definition'].astype(str).apply(preprocess_text)
 dataset['tokens'] = dataset['definition'].apply(tokenize_text)
 
-print(dataset.head())
+definitions = dataset['tokens']
+words = dataset['word']
+
+# Tokenize words
+word_tokenizer = Tokenizer()
+word_tokenizer.fit_on_texts(words)
+word_sequences = word_tokenizer.texts_to_sequences(words)
+
+# Tokenize definitions
+definition_tokenizer = Tokenizer()
+definition_tokenizer.fit_on_texts(definitions)
+definition_sequences = definition_tokenizer.texts_to_sequences(definitions)
+
+# Define the model
+max_word_sequence_length = max(len(seq) for seq in word_sequences)
+max_definition_sequence_length = max(len(seq) for seq in definition_sequences)
