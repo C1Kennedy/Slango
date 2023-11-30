@@ -1,149 +1,136 @@
+# Cameron Kennedy, Blank Bruno, Bella Quintero, UTEP, Fall 2023
+# Speech and Language Processing
+# Project: Slango Model
+
+import os
 import pandas as pd
 import numpy as np
-from collections import Counter
-import spacy
-import torch
-import torch.nn as nn
-import torch.optim as optim
-from torch.utils.data import Dataset, DataLoader
-from torch.nn.utils.rnn import pad_sequence
+import random
+from scipy.spatial.distance import cosine
+from nltk.tokenize import word_tokenize
+from nltk.stem import PorterStemmer, WordNetLemmatizer
+from gensim.models import Word2Vec
 
-max_words = 10000
+def load_data_for_generation(file_path):
+    # Load data from CSV file
+    return pd.read_csv(file_path, usecols=['word', 'definition'], skiprows=range(1, 10000), nrows=10500-10000)
 
-df = pd.read_csv('urbandict-word-defs.csv', error_bad_lines=False, nrows=max_words)
+def load_data_for_training(file_path):
+    # Load data from CSV file
+    return pd.read_csv(file_path, usecols=['word', 'definition'], nrows=10000)
 
-df.dropna(inplace = True)
-df.drop_duplicates(subset=['word', 'definition'], inplace = True)
+def preprocess_data(data):
+    # Tokenize, lemmatize, and stem the data
+    tokenized_data = [
+        word_tokenize(str(definition).lower()) + word_tokenize(str(word).lower())
+        for word, definition in zip(data['word'], data['definition'])
+    ]
+    lemmatizer = WordNetLemmatizer()
+    porter_stemmer = PorterStemmer()
+    preprocessed_data = [
+        [porter_stemmer.stem(lemmatizer.lemmatize(word)) for word in definition]
+        for definition in tokenized_data
+    ]
+    return preprocessed_data
 
-dataset = df[['word', 'up_votes', 'down_votes', 'definition']].copy()
+def generate_text(word2vec_model, data, num_templates=1, num_words=20):
 
-print(dataset.head())
+    for _ in range(num_templates):
+        # Randomly select a definition from the unseen data
+        entry = data.loc[random.randrange(0, len(data))]
+        word = entry['word']
+        template_definition = entry['definition']
 
-nlp = spacy.load("en_core_web_sm")
+        # Tokenize the selected definition
+        tokenized_definition = word_tokenize(str(template_definition).lower())
 
-def preprocess_text(text):
-    # Lowercase
-    text = text.lower()
-    # Remove punctuation
-    text = ''.join([c for c in text if c not in ('!', '.', ',', '?', ':', ';', '"', "'", '-')])
-    return text
+        # Replace placeholders with similar words based on Word2Vec embeddings
+        for _ in range(num_words):
+            placeholder = random.choice(tokenized_definition)
+            replacement = replace_placeholder(word2vec_model, placeholder)
+            tokenized_definition[tokenized_definition.index(placeholder)] = replacement
 
-def tokenize_text(text):
-    doc = nlp(text)
-    tokens = [token.text for token in doc if not token.is_stop]
-    return tokens
+        generated_text = ' '.join(tokenized_definition)
 
-dataset['definition'] = dataset['definition'].astype(str).apply(preprocess_text)
-dataset['tokens'] = dataset['definition'].apply(tokenize_text)
+    return word, generated_text
 
-definitions = dataset['tokens']
-words = dataset['word']
-
-UNK_TOKEN = '<UNK>'
-word_to_index = {word: index for index, word in enumerate(words)}
-word_to_index[UNK_TOKEN] = len(words)  # Add UNK token to the vocabulary
-index_to_word = {index: word for index, word in enumerate(words)}
-index_to_word[len(words)] = UNK_TOKEN  # Update the index-to-word mapping
-
-def tokens_to_indices(tokens):
-    return [word_to_index.get(token, word_to_index[UNK_TOKEN]) for token in tokens]
-
-# Apply the conversion to dataset
-definitions_tokens_indices = definitions.apply(tokens_to_indices)
-
-class TextGenerationDataset(Dataset):
-    def __init__(self, definitions, words, max_sequence_length):
-        self.definitions = definitions
-        self.words = words
-        self.max_sequence_length = max_sequence_length
-
-    def __len__(self):
-        return len(self.definitions)
+def replace_placeholder(word2vec_model, placeholder):
+    # Replace the placeholder with a word similar in meaning
+    try:
+        return word2vec_model.wv.most_similar(placeholder, topn=1)[0][0]
     
-    def __getitem__(self, index):
-        definitions_tokens = self.definitions.iloc[index]
-        word_index = self.words.iloc[index]
+    except KeyError:
+        return placeholder
 
-        word_index = word_to_index[word_index]
-        return{
-            'definition_tokens': definitions_tokens,
-            'word_index': word_index
-        }
+def load_w2v_model(model_path):
+    if os.path.exists(model_path):
+        # Load the existing Word2Vec model
+        return Word2Vec.load(model_path)
+
+def find_most_similar_words(word2vec_model, generated_sentence, training_data, top_n = 4):
+    # Preprocess the generated sentence
+    preprocessed_generated_sentence = [word for word in word_tokenize(generated_sentence.lower()) if word in word2vec_model.wv.key_to_index]
+
+    # Calculate the mean vector of the generated sentence
+    generated_sentence_vector = np.mean([get_word2vec_embeddings(word2vec_model, word) for word in preprocessed_generated_sentence], axis=0)
+
+    # Initialize a list to store the top n most similar words and their cosine similarity scores
+    most_similar_words = []
+
+    for index, definition in enumerate(training_data['definition']):
+        
+        tokenized_definition = [word for word in word_tokenize(str(definition).lower()) if word in word2vec_model.wv.key_to_index]
+        definition_vector = np.mean([get_word2vec_embeddings(word2vec_model, word) for word in tokenized_definition], axis = 0)
+
+        # Flatten the vectors before passing them to the cosine function
+        generated_sentence_vector = generated_sentence_vector.ravel()
+        definition_vector = definition_vector.ravel()
+
+        # Calculate the cosine similarity between the generated sentence vector and the current definition vector
+        cosine_similarity = 1 - cosine(generated_sentence_vector, definition_vector)
+
+        # Add the current word (at the most similar definition's index) and its cosine similarity score to the most_similar_words list
+        most_similar_words.append((training_data['word'][index], cosine_similarity))
+
+    # Shuffle the list of most similar words before returning them
+    random.shuffle(most_similar_words)
+
+    # Return the top n most similar words
+    return random.sample([(word, similarity) for word, similarity in most_similar_words[:top_n]], top_n)
+
+def train_word2vec_model(preprocessed_data):
+    # Train Word2Vec model
+    return Word2Vec(sentences=preprocessed_data, vector_size=100, window=5, min_count=1, workers=4)
+
+def get_word2vec_embeddings(word2vec_model, word):
+    try:
+        return word2vec_model.wv[word]
+    except KeyError:
+        return np.zeros(word2vec_model.vector_size)
     
-text_generation_dataset = TextGenerationDataset(definitions_tokens_indices, words, max_sequence_length = 20)
-
-class TextGenerationModel(nn.Module):
-    def __init__(self, vocab_size, embedding_dim, hidden_dim):
-        super(TextGenerationModel, self).__init__()
-        self.embedding = nn.Embedding(vocab_size, embedding_dim)
-        self.rnn = nn.LSTM(embedding_dim, hidden_dim, batch_first=True)
-        self.fc = nn.Linear(hidden_dim, vocab_size)
-
-    def forward(self, x):
-        x = self.embedding(x)
-        x, _ = self.rnn(x)
-        x = self.fc(x)
-        return x
+file_path = "urbandict-word-defs.csv"
+word2vec_model_path = "slango_word2vec.model"
     
-vocab_size = len(index_to_word)
-embedding_dim = 128
-hidden_dim = 256
+# Load data
+train_data = load_data_for_training(file_path)
+gen_data = load_data_for_generation(file_path)
 
-model = TextGenerationModel(vocab_size, embedding_dim, hidden_dim)
-optimizer = optim.Adam(model.parameters(), lr = 0.001)
-criterion = nn.CrossEntropyLoss()
+def main():
+    #load Word2Vec model
+    word2vec_model = load_w2v_model(word2vec_model_path)
 
-def my_collate_fn(batch):
-    definitions_tokens = [item['definition_tokens'] for item in batch]
-    word_indices = [item['word_index'] for item in batch]
+    slang, generated_text = generate_text(word2vec_model, gen_data)
+    print(f'Generated text for {slang}: {generated_text}')
+
+    similar_words = find_most_similar_words(word2vec_model, generated_text, train_data)
+        
+    index = random.randrange(0, len(similar_words))
+    similar_words.insert(index, (slang, 0))
     
-    # Pad the sequences to have the same length
-    definitions_tokens_padded = pad_sequence([torch.LongTensor(seq) for seq in definitions_tokens], batch_first=True)
-    word_indices = torch.LongTensor(word_indices)
-    
-    return {
-        'definition_tokens': definitions_tokens_padded,
-        'word_index': word_indices
-    }
+    for i, word in enumerate(similar_words):
+        print(f"Word {i + 1}: {word[0]}")
+        
+    return index, slang.lower()
 
-
-data_loader = DataLoader(text_generation_dataset, batch_size = 64, shuffle = True, collate_fn=my_collate_fn)
-
-num_epochs = 10
-
-for epoch in range(num_epochs):
-    total_loss = 0
-    for batch in data_loader:
-        definition_tokens = batch['definition_tokens']
-        word_index = batch['word_index']
-        word_index = word_index.view(-1, 1)
-
-        optimizer.zero_grad()
-
-        output = model(definition_tokens)
-        output = output.view(definition_tokens.size(0), -1, vocab_size)
-
-        # Flatten both the output and word_index tensors to calculate the loss
-        loss = criterion(output.view(-1, vocab_size), word_index.view(-1))
-        loss.backward()
-        optimizer.step()
-
-        total_loss += loss.item()
-    
-    print(f"Epoch {epoch + 1}, Loss: {total_loss / len(data_loader)}")
-
-def generate_text(model, definition_tokens, max_length=20):
-    model.eval()
-    generated_sequence = definition_tokens.tolist()  # Convert to a Python list
-
-    for _ in range(max_length):
-        input_sequence = torch.LongTensor([generated_sequence[-1]])  # Use the generated sequence
-        output = model(input_sequence)
-        output = output.squeeze(0)
-        predicted_word_index = torch.argmax(output).item()
-
-        generated_sequence.append(predicted_word_index)
-
-    generated_text = " ".join([index_to_word.get(idx, UNK_TOKEN) for idx in generated_sequence])
-
-    return generated_text
+if __name__ == "__main__":
+    main()
