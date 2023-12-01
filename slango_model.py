@@ -97,7 +97,7 @@ def main():
     word2vec_model = Word2Vec.load("slango_word2vec.model")
 
     slang, generated_text = generate_text(word2vec_model, gen_data)
-    print(f'Generated text for {slang}: {generated_text}')
+    print(f'Generated text: {generated_text}')
 
     similar_words = find_most_similar_words(word2vec_model, generated_text, train_data)
         
