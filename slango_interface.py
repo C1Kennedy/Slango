@@ -49,6 +49,7 @@ if __name__ == "__main__":
         if (l.lower() == answer):
             print("Correct!")
             curr_score += 1
+
             
         else:
             try:
@@ -56,6 +57,9 @@ if __name__ == "__main__":
                 if (int(l) == (index + 1)):
                     print("Correct!")
                     curr_score += 1
+                else:
+                    print(f'Incorrect. The actual word for this definition is {answer}.')
+                    failures += 1
                     
             except:
                 # If neither of the correct answer conditions apply, increment failures.
